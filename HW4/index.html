@@ -1,0 +1,126 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>USA Trees — All Iterations (Tabbed)</title>
+  <style>
+    :root { --fg:#111; --bg:#fafafa; --muted:#666; --card:#fff; --border:#eee; --sel:#111; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--fg); margin: 0; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding: 16px 20px; border-bottom: 1px solid var(--border); background:var(--card); position:sticky; top:0; z-index:10; }
+    h1 { font-size: 18px; margin: 0; }
+    nav.tabs { display:flex; gap:.5rem; flex-wrap:wrap; }
+    .tab-btn { padding:8px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:13px; cursor:pointer; }
+    .tab-btn.active { background:#111; color:#fff; border-color:#111; }
+    main { padding: 16px; }
+    .container { max-width: 1280px; margin: 0 auto; display:grid; gap: 16px; }
+    .panel { background: var(--card); border:1px solid var(--border); border-radius: 14px; padding: 0; box-shadow: 0 2px 12px rgba(0,0,0,.04); }
+    .hidden { display:none; }
+    .frame-wrap { position: relative; }
+    iframe { width: 100%; height: 1100px; border: 0; display:block; background:#fff; }
+    .hint { color: var(--muted); font-size: 13px; padding: 0 14px 14px; }
+    .toolbar { display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; border-bottom:1px dashed #eee; font-size:12px; color:#333; }
+    .toolbar a { text-decoration: none; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>USA Trees — All Iterations</h1>
+    <nav class="tabs" id="nav-tabs">
+      <button class="tab-btn" data-tab="iter1">Iteration 1</button>
+      <button class="tab-btn" data-tab="iter2">Iteration 2</button>
+      <button class="tab-btn" data-tab="iter3">Iteration 3</button>
+      <button class="tab-btn" data-tab="iter4">Iteration 4</button>
+    </nav>
+  </header>
+
+  <main>
+    <div class="container">
+      <section id="view-iter1" class="panel">
+        <div class="toolbar">
+          <strong>Iteration 1 — Choropleth (Simplemaps)</strong>
+          <a href="iter1.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-iter1" src="iter1.html" loading="eager" title="Iteration 1"></iframe></div>
+        <p class="hint">If you see empty content, make sure you're serving files over http (e.g., <code>python -m http.server</code>) so CSVs can load.</p>
+      </section>
+
+      <section id="view-iter2" class="panel hidden">
+        <div class="toolbar">
+          <strong>Iteration 2 — Protection & Reforestation Lens</strong>
+          <a href="iter2.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-iter2" src="iter2.html" loading="lazy" title="Iteration 2"></iframe></div>
+      </section>
+
+      <section id="view-iter3" class="panel hidden">
+        <div class="toolbar">
+          <strong>Iteration 3 — Map + Scatter + Distribution</strong>
+          <a href="iter3.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-iter3" src="iter3.html" loading="lazy" title="Iteration 3"></iframe></div>
+      </section>
+
+      <section id="view-iter4" class="panel hidden">
+        <div class="toolbar">
+          <strong>Iteration 4 — Map + Ranked Bars</strong>
+          <a href="iter4.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-iter4" src="iter4.html" loading="lazy" title="Iteration 4"></iframe></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    (function(){
+      const btns = Array.from(document.querySelectorAll('#nav-tabs .tab-btn'));
+      const views = {
+        iter1: document.getElementById('view-iter1'),
+        iter2: document.getElementById('view-iter2'),
+        iter3: document.getElementById('view-iter3'),
+        iter4: document.getElementById('view-iter4'),
+      };
+
+      function show(tab){
+        const t = views[tab] ? tab : 'iter1';
+        btns.forEach(b => b.classList.toggle('active', b.dataset.tab === t));
+        Object.entries(views).forEach(([k, el]) => el.classList.toggle('hidden', k !== t));
+        const url = new URL(location.href); url.searchParams.set('tab', t); history.replaceState(null, '', url);
+        // kick a resize for the visible one
+        const frame = document.querySelector(`#view-${t} iframe`); if (frame) autoResize(frame, {repeats: 10, interval: 500});
+      }
+
+      function autoResize(frame, {repeats=5, interval=400}={}){
+        let count = 0;
+        const tick = () => {
+          try {
+            const doc = frame.contentDocument || frame.contentWindow.document;
+            const h1 = doc.documentElement ? doc.documentElement.scrollHeight : 0;
+            const h2 = doc.body ? doc.body.scrollHeight : 0;
+            const h = Math.max(h1, h2);
+            if (h && Math.abs(frame.clientHeight - h) > 10) frame.style.height = (h + 20) + 'px';
+          } catch(_) {
+            // cross-origin or not ready; ignore
+          }
+          if (++count < repeats) setTimeout(tick, interval);
+        };
+        tick();
+      }
+
+      // Initial tab (URL param or default to iter1)
+      const initial = new URL(location.href).searchParams.get('tab') || 'iter1';
+      show(initial);
+
+      // Wire clicks
+      btns.forEach(b => b.addEventListener('click', () => show(b.dataset.tab)));
+
+      // Resize when each iframe loads
+      document.querySelectorAll('iframe').forEach(f => {
+        f.addEventListener('load', () => autoResize(f, {repeats: 10, interval: 500}));
+      });
+    })();
+  </script>
+</body>
+</html>

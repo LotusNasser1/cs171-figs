@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Iteration 4 — Map + Ranked Bars (Linked)</title>
+<style>
+  :root { --fg:#111; --bg:#fafafa; --muted:#666; --card:#fff; --border:#eee; --sel:#111; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif; background:var(--bg); color:var(--fg); margin:0; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:.75rem; padding:14px 18px; border-bottom:1px solid var(--border); background:var(--card); position:sticky; top:0; z-index:10; }
+  h1 { margin:0; font-size:18px; }
+  .controls { display:flex; flex-wrap:wrap; align-items:center; gap:.5rem .75rem; }
+  label { font-size:13px; color:#333; display:flex; align-items:center; gap:.4rem; }
+  select { padding:6px 8px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:13px; cursor:pointer; }
+  main { padding:16px; }
+  .panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:12px; box-shadow:0 2px 12px rgba(0,0,0,.04); }
+  .panel h2 { margin:0 0 8px; font-size:15px; }
+  .legend { margin-top:8px; }
+  .legend .title { font-size:12px; font-weight:600; margin-bottom:6px; }
+  .legend .bar { display:flex; height:10px; border:1px solid #ddd; border-radius:4px; overflow:hidden; }
+  .legend .seg { flex:1; }
+  .legend .ticks { display:flex; justify-content:space-between; font-size:11px; color:#333; margin-top:4px; }
+  .grid { display:grid; gap:16px; max-width:1200px; margin:0 auto; }
+  svg { width:100%; height:auto; display:block; }
+  /* Map */
+  .state { stroke:#fff; stroke-width:0.6; transition: fill .15s, opacity .15s; }
+  .state.hovered { stroke:#111; stroke-width:1; }
+  .state.dimmed { opacity:.25; }
+  /* Bars */
+  .bar { transition: opacity .15s; }
+  .bar.hovered rect { stroke:#111; stroke-width:1.2; }
+  .bar.dimmed { opacity:.25; }
+  .bar-label { font-size:12px; fill:#222; dominant-baseline: middle; }
+  .axis text { font-size:11px; fill:#333; }
+  .axis path, .axis line { stroke:#ccc; shape-rendering: crispEdges; }
+  .tooltip { position:fixed; pointer-events:none; background:#fff; border:1px solid #ddd; border-radius:8px; padding:8px 10px; box-shadow:0 4px 16px rgba(0,0,0,.08); font-size:12px; opacity:0; transition:opacity .1s; }
+  .hint { color:var(--muted); font-size:12px; margin-top:6px; }
+  .bar-controls { display:flex; gap:.5rem; align-items:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Iteration 4 — Map + Ranked Bars</h1>
+  <div class="controls">
+    <label>Map metric <select id="metricMap"></select></label>
+    <label>Bar metric <select id="metricBar"></select></label>
+    <label>Show 
+      <select id="rank">
+        <option value="all">All states</option>
+        <option value="top10">Top 10</option>
+        <option value="bottom10">Bottom 10</option>
+      </select>
+    </label>
+    <label>Sort 
+      <select id="sortBy">
+        <option value="value">by value</option>
+        <option value="alpha">alphabetically</option>
+      </select>
+    </label>
+    <label>Order 
+      <select id="order">
+        <option value="desc">desc</option>
+        <option value="asc">asc</option>
+      </select>
+    </label>
+  </div>
+</header>
+
+<main>
+  <div class="grid">
+    <!-- Map -->
+    <section class="panel">
+      <h2>US Map</h2>
+      <svg id="map" viewBox="0 0 975 610" aria-label="United States map"></svg>
+      <div id="legend-map" class="legend"></div>
+      <p class="hint">Pick a Bar metric to rank states below. Hover either view to highlight the other.</p>
+    </section>
+
+    <!-- Bars -->
+    <section class="panel">
+      <h2>Ranked Bars</h2>
+      <svg id="bars" aria-label="Ranked bar chart"></svg>
+      <div id="legend-bars" class="legend"></div>
+    </section>
+  </div>
+</main>
+
+<div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+<script>
+(function(){
+  // ====== Helpers & constants ======
+  const GREEN = ['#f7fcf5','#e5f5e0','#c7e9c0','#a1d99b','#74c476','#41ab5d','#238b45','#005a32'];
+  const fmt = { num: d3.format(".3~g"), pct1: d3.format(".1f") };
+
+  const NAME_TO_CODE = {"Alabama":"AL","Alaska":"AK","Arizona":"AZ","Arkansas":"AR","California":"CA","Colorado":"CO","Connecticut":"CT","Delaware":"DE","District of Columbia":"DC","Florida":"FL","Georgia":"GA","Hawaii":"HI","Idaho":"ID","Illinois":"IL","Indiana":"IN","Iowa":"IA","Kansas":"KS","Kentucky":"KY","Louisiana":"LA","Maine":"ME","Maryland":"MD","Massachusetts":"MA","Michigan":"MI","Minnesota":"MN","Mississippi":"MS","Missouri":"MO","Montana":"MT","Nebraska":"NE","Nevada":"NV","New Hampshire":"NH","New Jersey":"NJ","New Mexico":"NM","New York":"NY","North Carolina":"NC","North Dakota":"ND","Ohio":"OH","Oklahoma":"OK","Oregon":"OR","Pennsylvania":"PA","Rhode Island":"RI","South Carolina":"SC","South Dakota":"SD","Tennessee":"TN","Texas":"TX","Utah":"UT","Vermont":"VT","Virginia":"VA","Washington":"WA","West Virginia":"WV","Wisconsin":"WI","Wyoming":"WY"};
+  const CODE_TO_NAME = Object.fromEntries(Object.entries(NAME_TO_CODE).map(([k,v])=>[v,k]));
+
+  // DOM
+  const selMap = document.getElementById('metricMap');
+  const selBar = document.getElementById('metricBar');
+  const selRank = document.getElementById('rank');
+  const selSort = document.getElementById('sortBy');
+  const selOrder = document.getElementById('order');
+
+  const legendMap = d3.select('#legend-map');
+  const legendBars = d3.select('#legend-bars');
+  const tooltip = d3.select('#tooltip');
+
+  // Map projection/path
+  const Wm=975, Hm=610;
+  const projection = d3.geoAlbersUsa().translate([Wm/2, Hm/2]).scale(1280);
+  const path = d3.geoPath(projection);
+  const svgMap = d3.select('#map');
+  const gMap = svgMap.append('g');
+
+  // Bars svg (height dynamic)
+  const svgBars = d3.select('#bars');
+  const Bm = {t:24, r:20, b:36, l:130}; // big left for state names
+  const rowH = 20, rowGap = 6;
+
+  // State
+  let states=[], rows=[], metrics=[], labels={}, types={};
+  let hovered = null;
+
+  // ====== Load topojson + CSV ======
+  Promise.all([
+    d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json'),
+    d3.csv('data/trees.csv', r => {
+      const o={}; for(const [k,v] of Object.entries(r)) o[k.trim().toLowerCase()] = v;
+      return o;
+    })
+  ]).then(([us, raw])=>{
+    // Normalize rows
+    rows = raw.map(r=>{
+      const name = (r.state||'').trim();
+      let code = (r.code||'').trim().toUpperCase();
+      if (!code && name) code = NAME_TO_CODE[name] || '';
+      const out = {...r, _name:name, _code:code};
+      for (const k of Object.keys(out)) {
+        if (k==='state'||k==='code'||k==='_name'||k==='_code') continue;
+        const n = +String(out[k]).replace(/[,\s%]/g,'');
+        out[k] = Number.isFinite(n) ? n : NaN;
+      }
+      return out;
+    });
+
+    // Metric detection + labels/types
+    const skip = new Set(['state','code','_name','_code']);
+    const allKeys = Array.from(new Set(rows.flatMap(r=>Object.keys(r)))).filter(k=>!skip.has(k));
+    metrics = allKeys.filter(k => rows.some(r => Number.isFinite(r[k])));
+    labels = Object.fromEntries(metrics.map(k => [k, k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())]));
+    types  = Object.fromEntries(metrics.map(k => [k, k.endsWith('_pct') ? 'pct' : 'num']));
+
+    // Dropdowns
+    const opt = k => `<option value="${k}">${labels[k]}</option>`;
+    selMap.innerHTML = metrics.map(opt).join('');
+    selBar.innerHTML = metrics.map(opt).join('');
+    // Defaults
+    selMap.value = metrics.includes('canopy_cover_pct') ? 'canopy_cover_pct' : metrics[0];
+    selBar.value = metrics.includes('reforestation_rate_pct') ? 'reforestation_rate_pct' : metrics[0];
+
+    // Build map features & join
+    states = topojson.feature(us, us.objects.states).features;
+    const borders = topojson.mesh(us, us.objects.states, (a,b)=>a!==b);
+    const byName = new Map(rows.map(r=>[r._name, r]));
+    const byCode = new Map(rows.map(r=>[r._code, r]));
+    states.forEach(f => {
+      const name = f.properties.name;
+      const code = NAME_TO_CODE[name] || '';
+      f.data = byName.get(name) || byCode.get(code) || null;
+    });
+
+    // Draw map paths
+    const paths = gMap.selectAll('.state')
+      .data(states)
+      .join('path')
+      .attr('class','state')
+      .attr('d', path)
+      .attr('fill', '#eee')
+      .on('mousemove', (event, d) => setHover(d.properties.name, event))
+      .on('mouseleave', () => setHover(null, null));
+
+    svgMap.append('path')
+      .attr('d', path(borders))
+      .attr('fill','none')
+      .attr('stroke','#fff')
+      .attr('stroke-width',0.6)
+      .attr('pointer-events','none');
+
+    // Wire controls
+    [selMap, selBar, selRank, selSort, selOrder].forEach(el => el.addEventListener('change', renderAll));
+
+    // Initial render
+    renderAll();
+  }).catch(err=>{
+    console.error(err);
+    alert('Failed to load map or CSV. Make sure data/trees.csv exists and you are running a local server.');
+  });
+
+  // ====== Render everything ======
+  function renderAll(){
+    if (!states.length) return;
+
+    // --- Map colors (based on Map metric)
+    const mMap = selMap.value;
+    const valsMap = states.map(s => s.data?.[mMap]).filter(Number.isFinite);
+    const colorMap = d3.scaleQuantile().domain(valsMap).range(GREEN);
+
+    gMap.selectAll('.state')
+      .attr('fill', d => Number.isFinite(d.data?.[mMap]) ? colorMap(d.data[mMap]) : '#eee')
+      .classed('hovered', d => hovered && d.properties.name === hovered);
+
+    drawLegend(legendMap, valsMap, colorMap, labels[mMap]);
+
+    // --- Bars (based on Bar metric)
+    const mBar = selBar.value;
+    const dataAll = states.map(s => ({
+      name: s.properties.name,
+      val:  s.data?.[mBar],
+      map:  s.data?.[mMap]
+    })).filter(d => Number.isFinite(d.val));
+
+    let data = dataAll.slice();
+
+    // Rank filter
+    data.sort((a,b)=> d3.descending(a.val,b.val));
+    if (selRank.value==='top10')  data = data.slice(0, Math.min(10, data.length));
+    if (selRank.value==='bottom10') data = data.slice(-Math.min(10, data.length));
+
+    // Sorting
+    if (selSort.value==='value'){
+      data.sort((a,b)=> selOrder.value==='asc' ? d3.ascending(a.val,b.val) : d3.descending(a.val,b.val));
+    } else { // alphabetical
+      data.sort((a,b)=> selOrder.value==='asc' ? d3.ascending(a.name,b.name) : d3.descending(a.name,b.name));
+    }
+
+    // Scales
+    const w = 1000, innerW = w - Bm.l - Bm.r;
+    const h = Bm.t + Bm.b + data.length * (rowH + rowGap);
+    const x = d3.scaleLinear().domain([0, d3.max(data, d=>d.val)||1]).nice().range([0, innerW]);
+    const y = d3.scaleBand().domain(data.map(d=>d.name)).range([0, data.length*(rowH+rowGap)]).paddingInner(0.2);
+
+    // Color bars by their own metric (quantiles)
+    const valsBar = dataAll.map(d=>d.val);
+    const colorBar = d3.scaleQuantile().domain(valsBar).range(GREEN);
+
+    // Resize bars SVG
+    svgBars.attr('viewBox', `0 0 ${w} ${h}`);
+
+    // Root group
+    svgBars.selectAll('*').remove();
+    const g = svgBars.append('g').attr('transform', `translate(${Bm.l},${Bm.t})`);
+
+    // X axis
+    g.append('g').attr('class','axis').attr('transform', `translate(0,${y.range()[1]})`)
+      .call(d3.axisBottom(x).ticks(6));
+    // Y labels (state names)
+    const yLabels = g.append('g').selectAll('text').data(data).join('text')
+      .attr('class','bar-label')
+      .attr('x', -8).attr('y', d => y(d.name) + y.bandwidth()/2)
+      .attr('text-anchor','end').text(d => d.name)
+      .on('mousemove', (event,d)=> setHover(d.name, event))
+      .on('mouseleave', ()=> setHover(null,null));
+
+    // Bars
+    const bars = g.append('g').selectAll('g').data(data, d=>d.name).join('g')
+      .attr('class','bar')
+      .attr('transform', d => `translate(0, ${y(d.name)})`)
+      .on('mousemove', (event,d)=> setHover(d.name, event))
+      .on('mouseleave', ()=> setHover(null,null));
+
+    bars.append('rect')
+      .attr('x', 0).attr('y', 0)
+      .attr('height', y.bandwidth())
+      .attr('width', d => x(d.val))
+      .attr('fill', d => colorBar(d.val))
+      .attr('stroke', 'none');
+
+    // Value labels at end of bar
+    bars.append('text')
+      .attr('x', d => x(d.val) + 6)
+      .attr('y', y.bandwidth()/2)
+      .attr('dominant-baseline','middle')
+      .attr('font-size', 11)
+      .attr('fill', '#333')
+      .text(d => pretty(d.val, mBar));
+
+    // Hover states
+    updateHoverStyles();
+
+    // Legends
+    drawLegend(legendBars, valsBar, colorBar, labels[mBar]);
+  }
+
+  // ====== Hover linking ======
+  function setHover(name, event){
+    hovered = name;
+    updateHoverStyles();
+
+    // Tooltip content
+    if (hovered && event){
+      const mMap = selMap.value, mBar = selBar.value;
+      const st = states.find(s => s.properties.name === hovered);
+      const parts = [
+        `<strong>${hovered}</strong>`,
+        `${labels[mMap]}: ${pretty(st?.data?.[mMap], mMap)}`,
+        `${labels[mBar]}: ${pretty(st?.data?.[mBar], mBar)}`
+      ];
+      tooltip.style('opacity',1)
+        .html(parts.join('<br>'))
+        .style('left', (event.clientX + 14) + 'px')
+        .style('top',  (event.clientY - 24) + 'px');
+    } else {
+      tooltip.style('opacity',0);
+    }
+  }
+
+  function updateHoverStyles(){
+    // Map
+    d3.selectAll('.state').classed('hovered', d => hovered && d.properties.name === hovered);
+    // Bars (groups keyed by name)
+    d3.select('#bars').selectAll('.bar')
+      .classed('hovered', d => hovered && d.name === hovered);
+    d3.select('#bars').selectAll('.bar-label')
+      .attr('font-weight', d => hovered && d.name === hovered ? 600 : null);
+  }
+
+  // ====== Legend & formatting ======
+  function drawLegend(holder, values, color, title){
+    holder.selectAll('*').remove();
+    if (!values || !values.length) return;
+    const bins=[d3.min(values), ...color.quantiles(), d3.max(values)];
+    const wrap=holder.append('div').attr('class','legend');
+    wrap.append('div').attr('class','title').text(title);
+    const bar=wrap.append('div').attr('class','bar');
+    for(let i=0;i<bins.length-1;i++){
+      bar.append('span').attr('class','seg').style('background', color((bins[i]+bins[i+1])/2));
+    }
+    const ticks=wrap.append('div').attr('class','ticks');
+    bins.forEach(b => ticks.append('span').text(fmt.num(b)));
+  }
+
+  function pretty(v, key){
+    if (!Number.isFinite(v)) return 'N/A';
+    const isPct = key && key.endsWith('_pct');
+    return isPct ? (fmt.pct1(v)+'%') : fmt.num(v);
+  }
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Iteration 2 – Protection & Reforestation Lens</title>
+  <style>
+    :root { --fg:#111; --bg:#fafafa; --muted:#666; --card:#fff; --border:#eee; --sel:#111; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--fg); margin: 0; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding: 16px 20px; border-bottom: 1px solid var(--border); background:var(--card); position:sticky; top:0; z-index:10; }
+    h1 { font-size: 18px; margin: 0; }
+    .controls { display:flex; align-items:center; gap:.75rem; font-size: 14px; color:#333; }
+    main { padding: 16px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr 320px; gap: 16px; align-items:start; }
+    .panel { background: var(--card); border:1px solid var(--border); border-radius: 14px; padding: 14px; box-shadow: 0 2px 12px rgba(0,0,0,.04); }
+    .panel h2 { margin: 0 0 8px; font-size: 15px; letter-spacing:.02em; color:#444; }
+    svg { width: 100%; height: auto; display:block; }
+    .state { stroke:#fff; stroke-width:0.6; transition: fill .15s, stroke-width .1s; }
+    .state.hovered { stroke:#111; stroke-width:1; }
+    .state.selected { stroke: var(--sel); stroke-width:2; }
+    .legend { margin-top: 10px; }
+    .legend .title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .legend .bar { display:flex; height: 10px; border:1px solid #ddd; border-radius:4px; overflow:hidden; }
+    .legend .seg { flex:1; }
+    .legend .ticks { display:flex; justify-content:space-between; font-size: 11px; color:#333; margin-top: 4px; }
+    .shortlist { position: sticky; top: 92px; }
+    .shortlist .empty { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:8px 0; border-bottom:1px dashed #eee; }
+    .row:last-child { border-bottom:none; }
+    .name { font-weight:600; }
+    .vals { font-size: 12px; color:#333; display:flex; gap:8px; }
+    .gappos { color:#1a7f37; }
+    .gapneg { color:#b42318; }
+    button, input[type="checkbox"] { cursor: pointer; }
+    .btn { padding:6px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+    .tooltip { position: fixed; pointer-events: none; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.08); font-size: 12px; opacity: 0; transition: opacity .1s; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Iteration 2 – Protection & Reforestation Lens</h1>
+    <div class="controls">
+      <label><input id="shared" type="checkbox" checked> Use shared color scale</label>
+      <button id="clear" class="btn" disabled>Clear Selection</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="grid">
+      <section class="panel" id="panel-prot">
+        <h2>Protected Area Trees (%)</h2>
+        <svg id="map-prot" viewBox="0 0 975 610" aria-label="Protected land map"></svg>
+        <div class="legend" id="legend-prot"></div>
+      </section>
+
+      <section class="panel" id="panel-refo">
+        <h2>Reforestation Rate (%)</h2>
+        <svg id="map-refo" viewBox="0 0 975 610" aria-label="Reforestation map"></svg>
+        <div class="legend" id="legend-refo"></div>
+      </section>
+
+      <aside class="panel shortlist" id="panel-short">
+        <h2>Selected States</h2>
+        <div id="list"></div>
+        <div class="empty" id="empty">Click states to add them here.</div>
+      </aside>
+    </div>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+  <script>
+  // ========= Helpers & constants =========
+  const GREEN = ['#f7fcf5','#e5f5e0','#c7e9c0','#a1d99b','#74c476','#41ab5d','#238b45','#005a32'];
+  const fmtPct = d3.format('.1f');
+  const toNum = x => { const s = String(x ?? '').trim().replace(/[,%\s]/g,''); const v = +s; return Number.isFinite(v) ? v : NaN; };
+  const log = (...a) => console.log('[iter2]', ...a);
+
+  // ========= Load data =========
+  Promise.all([
+    d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json'),
+    d3.csv('data/trees.csv') // change to '../data/trees.csv' if this file lives in a subfolder
+  ]).then(([us, raw]) => {
+    // normalize headers to lowercase keys for matching
+    const rows = raw.map(r => {
+      const o = {}; for (const [k,v] of Object.entries(r)) o[k.trim().toLowerCase()] = v; return o;
+    });
+
+    // auto-detect the two columns (works with your names)
+    const cols = Object.keys(rows[0]);
+    const findCol = (cands) => cands.find(c => cols.includes(c));
+    const protKey = findCol(['protected_area_trees_pct','protected_area_pct']);
+    const refoKey = findCol(['reforestation_rate_pct','reforestation_pct']);
+    if (!protKey || !refoKey) throw new Error(`Missing expected columns. Found: ${cols.join(', ')}`);
+    log(`columns → protected="${protKey}", reforestation="${refoKey}"`);
+
+    // clean values
+    rows.forEach(d => { d.state = (d.state || '').trim(); d[protKey] = toNum(d[protKey]); d[refoKey] = toNum(d[refoKey]); });
+    log(`rows loaded: ${rows.length}`);
+
+    // topo features & projection
+    const states = topojson.feature(us, us.objects.states).features;
+    const borders = topojson.mesh(us, us.objects.states, (a,b) => a !== b);
+    const width=975, height=610;
+    const projection = d3.geoAlbersUsa().translate([width/2,height/2]).scale(1280);
+    const path = d3.geoPath(projection);
+
+    // join CSV by full state name
+    const byName = new Map(rows.map(d => [d.state, d]));
+    for (const f of states) f.data = byName.get(f.properties.name) || null;
+
+    // DOM refs
+    const svgProt = d3.select('#map-prot'), svgRefo = d3.select('#map-refo');
+    const gProt = svgProt.append('g'), gRefo = svgRefo.append('g');
+    const legendProt = d3.select('#legend-prot'), legendRefo = d3.select('#legend-refo');
+    const tooltip = d3.select('#tooltip');
+    const sharedChk = document.getElementById('shared');
+    const clearBtn = document.getElementById('clear');
+    const selected = new Set();
+    const stateKey = d => d.properties.name;
+
+    // draw shapes
+    const protPaths = gProt.selectAll('.state').data(states).join('path')
+      .attr('class','state').attr('d', path).attr('fill','#eee');
+    const refoPaths = gRefo.selectAll('.state').data(states).join('path')
+      .attr('class','state').attr('d', path).attr('fill','#eee');
+
+    // borders
+    svgProt.append('path').attr('d', path(borders)).attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('pointer-events','none');
+    svgRefo.append('path').attr('d', path(borders)).attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('pointer-events','none');
+
+    // legends
+    function drawLegend(holder, color, title, values) {
+      holder.selectAll('*').remove();
+      if (!values || !values.length) return;
+      const bins = [d3.min(values), ...color.quantiles(), d3.max(values)];
+      const wrap = holder.append('div').attr('class','legend');
+      wrap.append('div').attr('class','title').text(title);
+      const bar = wrap.append('div').attr('class','bar');
+      for (let i=0;i<bins.length-1;i++) bar.append('span').attr('class','seg').style('background', color((bins[i]+bins[i+1])/2));
+      const ticks = wrap.append('div').attr('class','ticks');
+      bins.forEach(b => ticks.append('span').text(fmtPct(b)));
+    }
+
+    function highlight(name,on){
+      gProt.selectAll('.state').classed('hovered', d => on && stateKey(d)===name);
+      gRefo.selectAll('.state').classed('hovered', d => on && stateKey(d)===name);
+    }
+    function updateSelection(){
+      gProt.selectAll('.state').classed('selected', d => selected.has(stateKey(d)));
+      gRefo.selectAll('.state').classed('selected', d => selected.has(stateKey(d)));
+    }
+    function renderShortlist(){
+      const list = d3.select('#list'); const empty = d3.select('#empty');
+      list.selectAll('*').remove();
+      if (!selected.size){ empty.style('display','block'); clearBtn.disabled = true; return; }
+      empty.style('display','none'); clearBtn.disabled = false;
+      [...selected].sort().forEach(name => {
+        const f = states.find(s => s.properties.name===name);
+        const p = f?.data?.[protKey], r = f?.data?.[refoKey];
+        const gap = (Number.isFinite(p)&&Number.isFinite(r)) ? (p - r) : NaN;
+        const row = list.append('div').attr('class','row');
+        row.append('div').attr('class','name').text(name);
+        const vals = row.append('div').attr('class','vals');
+        vals.append('span').text(`Prot: ${Number.isFinite(p)? fmtPct(p)+'%' : 'N/A'}`);
+        vals.append('span').text(`Refo: ${Number.isFinite(r)? fmtPct(r)+'%' : 'N/A'}`);
+        vals.append('span').attr('class', Number.isFinite(gap)?(gap>=0?'gappos':'gapneg'):null)
+            .text(Number.isFinite(gap) ? `Gap: ${gap>=0?'+':''}${fmtPct(gap)}%` : '');
+        const btn = row.append('button').attr('class','btn').text('Remove')
+          .on('click', ()=>{ selected.delete(name); paint(); renderShortlist(); });
+      });
+    }
+
+    function paint(){
+      const valsProt = states.map(s => s.data?.[protKey]).filter(Number.isFinite);
+      const valsRefo = states.map(s => s.data?.[refoKey]).filter(Number.isFinite);
+      const all = sharedChk.checked ? valsProt.concat(valsRefo) : null;
+
+      const colorProt = d3.scaleQuantile().domain(sharedChk.checked ? all : valsProt).range(GREEN);
+      const colorRefo = d3.scaleQuantile().domain(sharedChk.checked ? all : valsRefo).range(GREEN);
+
+      protPaths.attr('fill', d => Number.isFinite(d.data?.[protKey]) ? colorProt(d.data[protKey]) : '#eee')
+               .classed('selected', d => selected.has(stateKey(d)));
+      refoPaths.attr('fill', d => Number.isFinite(d.data?.[refoKey]) ? colorRefo(d.data[refoKey]) : '#eee')
+               .classed('selected', d => selected.has(stateKey(d)));
+
+      drawLegend(legendProt, colorProt, 'Protected area trees (%)', sharedChk.checked ? all : valsProt);
+      drawLegend(legendRefo, colorRefo, 'Reforestation rate (%)', sharedChk.checked ? all : valsRefo);
+    }
+
+    function handleMove(event, d){
+      const name = stateKey(d);
+      const p = d.data?.[protKey], r = d.data?.[refoKey];
+      highlight(name, true);
+      tooltip.style('opacity', 1)
+        .html(`<strong>${name}</strong><br>Protected: ${Number.isFinite(p)? fmtPct(p)+'%' : 'N/A'}<br>Reforestation: ${Number.isFinite(r)? fmtPct(r)+'%' : 'N/A'}`)
+        .style('left', (event.clientX + 14) + 'px')
+        .style('top', (event.clientY - 24) + 'px');
+    }
+    function handleLeave(){ highlight(null,false); tooltip.style('opacity',0); }
+    function handleClick(_, d){ const name=stateKey(d); selected.has(name)? selected.delete(name): selected.add(name); updateSelection(); renderShortlist(); }
+
+    protPaths.on('mousemove', handleMove).on('mouseleave', handleLeave).on('click', handleClick);
+    refoPaths.on('mousemove', handleMove).on('mouseleave', handleLeave).on('click', handleClick);
+
+    sharedChk.addEventListener('change', paint);
+    clearBtn.addEventListener('click', ()=>{ selected.clear(); paint(); renderShortlist(); });
+
+    paint();
+  }).catch(err => {
+    console.error(err);
+    alert('Failed to load map or CSV. Open /data/trees.csv in the browser to confirm the path, then check the Console for details.');
+  });
+  </script>
+</body>
+</html>
