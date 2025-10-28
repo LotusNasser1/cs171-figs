@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>USA Trees — All Iterations (Tabbed)</title>
+  <title>CS171, HW4, Trees (Tabbed)</title>
   <style>
     :root { --fg:#111; --bg:#fafafa; --muted:#666; --card:#fff; --border:#eee; --sel:#111; }
     * { box-sizing: border-box; }
@@ -23,16 +22,22 @@
     .hint { color: var(--muted); font-size: 13px; padding: 0 14px 14px; }
     .toolbar { display:flex; align-items:center; justify-content:space-between; padding: 12px 14px; border-bottom:1px dashed #eee; font-size:12px; color:#333; }
     .toolbar a { text-decoration: none; }
+    .status { padding: 12px 14px; border-top: 1px dashed #eee; }
+    .status .warn { background:#fff7e6; border:1px solid #f7d7a1; color:#8a5a00; padding:10px 12px; border-radius:10px; font-size:13px; }
   </style>
 </head>
 <body>
   <header>
-    <h1>USA Trees — All Iterations</h1>
+    <h1>USA Trees</h1>
     <nav class="tabs" id="nav-tabs">
       <button class="tab-btn" data-tab="iter1">Iteration 1</button>
       <button class="tab-btn" data-tab="iter2">Iteration 2</button>
       <button class="tab-btn" data-tab="iter3">Iteration 3</button>
       <button class="tab-btn" data-tab="iter4">Iteration 4</button>
+      <!-- Interactives -->
+      <button class="tab-btn" data-tab="interactive1">Interactive 1</button>
+      <!-- New: Dashboard -->
+      <button class="tab-btn" data-tab="dashboard">Dashboard</button>
     </nav>
   </header>
 
@@ -40,35 +45,53 @@
     <div class="container">
       <section id="view-iter1" class="panel">
         <div class="toolbar">
-          <strong>Iteration 1 — Choropleth (Simplemaps)</strong>
           <a href="iter1.html" target="_blank" rel="noopener">Open standalone ↗</a>
         </div>
         <div class="frame-wrap"><iframe id="frame-iter1" src="iter1.html" loading="eager" title="Iteration 1"></iframe></div>
         <p class="hint">If you see empty content, make sure you're serving files over http (e.g., <code>python -m http.server</code>) so CSVs can load.</p>
+        <div class="status" id="status-iter1"></div>
       </section>
 
       <section id="view-iter2" class="panel hidden">
         <div class="toolbar">
-          <strong>Iteration 2 — Protection & Reforestation Lens</strong>
           <a href="iter2.html" target="_blank" rel="noopener">Open standalone ↗</a>
         </div>
         <div class="frame-wrap"><iframe id="frame-iter2" src="iter2.html" loading="lazy" title="Iteration 2"></iframe></div>
+        <div class="status" id="status-iter2"></div>
       </section>
 
       <section id="view-iter3" class="panel hidden">
         <div class="toolbar">
-          <strong>Iteration 3 — Map + Scatter + Distribution</strong>
           <a href="iter3.html" target="_blank" rel="noopener">Open standalone ↗</a>
         </div>
         <div class="frame-wrap"><iframe id="frame-iter3" src="iter3.html" loading="lazy" title="Iteration 3"></iframe></div>
+        <div class="status" id="status-iter3"></div>
       </section>
 
       <section id="view-iter4" class="panel hidden">
         <div class="toolbar">
-          <strong>Iteration 4 — Map + Ranked Bars</strong>
           <a href="iter4.html" target="_blank" rel="noopener">Open standalone ↗</a>
         </div>
         <div class="frame-wrap"><iframe id="frame-iter4" src="iter4.html" loading="lazy" title="Iteration 4"></iframe></div>
+        <div class="status" id="status-iter4"></div>
+      </section>
+
+      <section id="view-interactive1" class="panel hidden">
+        <div class="toolbar">
+          <a href="interactive1.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-interactive1" src="interactive1.html" loading="lazy" title="Interactive 1"></iframe></div>
+        <div class="status" id="status-interactive1"></div>
+      </section>
+
+
+      <!-- NEW: Dashboard -->
+      <section id="view-dashboard" class="panel hidden">
+        <div class="toolbar">
+          <a href="dashboard.html" target="_blank" rel="noopener">Open standalone ↗</a>
+        </div>
+        <div class="frame-wrap"><iframe id="frame-dashboard" src="dashboard.html" loading="lazy" title="Dashboard"></iframe></div>
+        <div class="status" id="status-dashboard"></div>
       </section>
     </div>
   </main>
@@ -81,15 +104,32 @@
         iter2: document.getElementById('view-iter2'),
         iter3: document.getElementById('view-iter3'),
         iter4: document.getElementById('view-iter4'),
+        interactive1: document.getElementById('view-interactive1'),
+        dashboard: document.getElementById('view-dashboard'),
       };
+
+      function findBtn(tab){ return btns.find(b => b.dataset.tab === tab); }
+
+      function setBtnWarning(tab, warn){
+        const b = findBtn(tab);
+        if(!b) return;
+        const label = b.textContent.replace(/^⚠️\s*/,'');
+        b.textContent = warn ? `⚠️ ${label}` : label;
+        if(warn) b.title = 'This tab has a loading issue'; else b.removeAttribute('title');
+      }
+
+      function setStatus(tab, html){
+        const box = document.getElementById(`status-${tab}`);
+        if(box) box.innerHTML = html || '';
+      }
 
       function show(tab){
         const t = views[tab] ? tab : 'iter1';
         btns.forEach(b => b.classList.toggle('active', b.dataset.tab === t));
         Object.entries(views).forEach(([k, el]) => el.classList.toggle('hidden', k !== t));
         const url = new URL(location.href); url.searchParams.set('tab', t); history.replaceState(null, '', url);
-        // kick a resize for the visible one
-        const frame = document.querySelector(`#view-${t} iframe`); if (frame) autoResize(frame, {repeats: 10, interval: 500});
+        const frame = document.querySelector(`#view-${t} iframe`);
+        if (frame) { autoResize(frame, {repeats: 10, interval: 500}); healthCheck(t, frame); }
       }
 
       function autoResize(frame, {repeats=5, interval=400}={}){
@@ -101,12 +141,39 @@
             const h2 = doc.body ? doc.body.scrollHeight : 0;
             const h = Math.max(h1, h2);
             if (h && Math.abs(frame.clientHeight - h) > 10) frame.style.height = (h + 20) + 'px';
-          } catch(_) {
-            // cross-origin or not ready; ignore
-          }
+          } catch(_) { /* cross-origin or not ready */ }
           if (++count < repeats) setTimeout(tick, interval);
         };
         tick();
+      }
+
+      function healthCheck(tab, frame){
+        const src = frame.getAttribute('src');
+        setBtnWarning(tab, false);
+        setStatus(tab, '');
+        if(!src) return;
+        fetch(src, { method: 'GET', cache: 'no-store' })
+          .then(r => {
+            if(!r.ok){
+              setBtnWarning(tab, true);
+              setStatus(tab, `<div class="warn">Could not load <code>${src}</code> (HTTP ${r.status}). Ensure the file exists next to <code>index.html</code> and that you're running a local server (e.g., <code>python -m http.server</code>).</div>`);
+              return;
+            }
+            setTimeout(() => {
+              try{
+                const doc = frame.contentDocument || frame.contentWindow.document;
+                const empty = !doc || !doc.body || !doc.body.children || doc.body.children.length === 0;
+                if(empty){
+                  setBtnWarning(tab, true);
+                  setStatus(tab, `<div class="warn">The iframe for <code>${src}</code> appears empty. This may be due to a JavaScript error inside that file or CSV/module paths that can't be fetched. Open it via the toolbar link to check the console, or load <code>${src}</code> directly.</div>`);
+                }
+              }catch(e){ /* ignore */ }
+            }, 1200);
+          })
+          .catch(() => {
+            setBtnWarning(tab, true);
+            setStatus(tab, `<div class="warn">Unable to reach <code>${src}</code>. Verify the filename and that your dev server is running.</div>`);
+          });
       }
 
       // Initial tab (URL param or default to iter1)
@@ -119,6 +186,13 @@
       // Resize when each iframe loads
       document.querySelectorAll('iframe').forEach(f => {
         f.addEventListener('load', () => autoResize(f, {repeats: 10, interval: 500}));
+        f.addEventListener('error', () => {
+          const tab = Object.entries(views).find(([, el]) => el.contains(f))?.[0];
+          if(tab){
+            setBtnWarning(tab, true);
+            setStatus(tab, `<div class="warn">The browser reported an iframe load error. Try opening the standalone link above.</div>`);
+          }
+        });
       });
     })();
   </script>

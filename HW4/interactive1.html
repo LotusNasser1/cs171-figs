@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interactive 1 — Conservation Gap Explorer (Protection vs Reforestation)</title>
+  <style>
+    :root { --fg:#111; --bg:#fafafa; --muted:#666; --card:#fff; --border:#eee; --sel:#111; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--fg); margin: 0; }
+    header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding: 16px 20px; border-bottom: 1px solid var(--border); background:var(--card); position:sticky; top:0; z-index:10; }
+    h1 { font-size: 18px; margin: 0; letter-spacing:.2px; }
+    .tagline { color:#444; font-size:12px; margin-top:4px; }
+    .controls { display:flex; align-items:center; gap:.75rem; font-size: 13px; color:#333; }
+
+    /* page container */
+    main { padding: 20px 16px 40px; max-width: 1400px; margin: 0 auto; }
+
+    /* compact, single-paragraph intro */
+    .intro-copy { 
+      font-size: 13px; 
+      line-height: 1.5; 
+      color: var(--muted); 
+      margin: 6px 0 18px; 
+    }
+    .intro-copy strong { color: #333; }
+
+    /* bigger vis: two wide columns; shortlist below maps */
+    .grid { 
+      display:grid; 
+      grid-template-columns: 1fr 1fr; 
+      gap: 18px; 
+      align-items:start; 
+    }
+    .panel { 
+      background: var(--card); 
+      border:1px solid var(--border); 
+      border-radius: 14px; 
+      padding: 14px; 
+      box-shadow: 0 2px 12px rgba(0,0,0,.04); 
+    }
+    .panel h2 { margin: 0 0 8px; font-size: 15px; letter-spacing:.02em; color:#444; }
+    svg { width: 100%; height: auto; display:block; }
+    .state { stroke:#fff; stroke-width:0.6; transition: fill .15s, stroke-width .1s; }
+    .state.hovered { stroke:#111; stroke-width:1; }
+    .state.selected { stroke: var(--sel); stroke-width:2; }
+
+    /* legend */
+    .legend { margin-top: 10px; }
+    .legend .title { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+    .legend .bar { display:flex; height: 10px; border:1px solid #ddd; border-radius:4px; overflow:hidden; }
+    .legend .seg { flex:1; }
+    .legend .ticks { display:flex; justify-content:space-between; font-size: 11px; color:#333; margin-top: 4px; }
+
+    /* shortlist now spans full width under maps */
+    .shortlist { grid-column: 1 / -1; position: static; }
+    .shortlist .empty { color: var(--muted); font-size: 13px; margin-top: 4px; }
+    .row { display:flex; align-items:center; justify-content:space-between; gap:.5rem; padding:8px 0; border-bottom:1px dashed #eee; }
+    .row:last-child { border-bottom:none; }
+    .name { font-weight:600; }
+    .vals { font-size: 12px; color:#333; display:flex; gap:8px; }
+    .gappos { color:#1a7f37; }
+    .gapneg { color:#b42318; }
+    button, input[type="checkbox"] { cursor: pointer; }
+    .btn { padding:6px 10px; border-radius:10px; border:1px solid #ddd; background:#fff; font-size:12px; }
+    .btn:disabled { opacity:.5; cursor:not-allowed; }
+
+    /* tooltip */
+    .tooltip { position: fixed; pointer-events: none; background: #fff; border: 1px solid #ddd; border-radius: 8px; padding: 8px 10px; box-shadow: 0 4px 16px rgba(0,0,0,.08); font-size: 12px; opacity: 0; transition: opacity .1s; }
+
+    /* small screens: stack maps */
+    @media (max-width: 900px){
+      .grid { grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>Conservation Gap Explorer</h1>
+      <div class="tagline">Protection vs. Reforestation, by U.S. state</div>
+    </div>
+    <div class="controls">
+      <label><input id="shared" type="checkbox" checked> Use shared color scale</label>
+      <button id="clear" class="btn" disabled>Clear Selection</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- compact paragraph on top -->
+    <p class="intro-copy">
+      <strong>Protected Area Trees (%)</strong> is the share of a state’s trees that fall inside protected lands.
+      <strong>Reforestation Rate (%)</strong> is the estimated annual share of new tree cover.
+      Hover a state to compare both values side‑by‑side; click to add a state to your shortlist. Toggle
+      <em>Use shared color scale</em> to make both maps directly comparable.
+    </p>
+
+    <!-- larger visualizations below -->
+    <div class="grid">
+      <section class="panel" id="panel-prot">
+        <h2>Protected Area Trees (%)</h2>
+        <svg id="map-prot" viewBox="0 0 975 610" aria-label="Protected land map"></svg>
+        <div class="legend" id="legend-prot"></div>
+      </section>
+
+      <section class="panel" id="panel-refo">
+        <h2>Reforestation Rate (%)</h2>
+        <svg id="map-refo" viewBox="0 0 975 610" aria-label="Reforestation map"></svg>
+        <div class="legend" id="legend-refo"></div>
+      </section>
+
+      <aside class="panel shortlist" id="panel-short">
+        <h2>Selected States</h2>
+        <div id="list"></div>
+        <div class="empty" id="empty">Click states to add them here.</div>
+      </aside>
+    </div>
+  </main>
+
+  <div id="tooltip" class="tooltip" role="status" aria-live="polite"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3"></script>
+  <script>
+  (function(){
+    const METRIC_PROT = 'protected_area_trees_pct';
+    const METRIC_REFO = 'reforestation_rate_pct';
+    const GREEN = ['#f7fcf5','#e5f5e0','#c7e9c0','#a1d99b','#74c476','#41ab5d','#238b45','#005a32'];
+    const fmtPct = d3.format('.1f');
+
+    const svgProt = d3.select('#map-prot');
+    const svgRefo = d3.select('#map-refo');
+    const gProt = svgProt.append('g');
+    const gRefo = svgRefo.append('g');
+    const tooltip = d3.select('#tooltip');
+    const sharedChk = document.getElementById('shared');
+    const clearBtn = document.getElementById('clear');
+    const legendProt = d3.select('#legend-prot');
+    const legendRefo = d3.select('#legend-refo');
+
+    const width = 975, height = 610;
+    const projection = d3.geoAlbersUsa().translate([width/2, height/2]).scale(1280);
+    const path = d3.geoPath(projection);
+    const stateKey = d => d.properties.name;
+    const selected = new Set();
+
+    Promise.all([
+      d3.json('https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json'),
+      d3.csv('data/trees.csv', d => ({
+        state: (d.state||'').trim(),
+        [METRIC_PROT]: +String(d[METRIC_PROT]??'').replace(/[,%\\s]/g,''),
+        [METRIC_REFO]: +String(d[METRIC_REFO]??'').replace(/[,%\\s]/g,''),
+      }))
+    ]).then(([us, rows]) => {
+      const states = topojson.feature(us, us.objects.states).features;
+      const borders = topojson.mesh(us, us.objects.states, (a,b) => a !== b);
+
+      const byName = new Map(rows.map(d => [d.state, d]));
+      for (const f of states) f.data = byName.get(f.properties.name) || null;
+
+      const protPaths = gProt.selectAll('.state')
+        .data(states).join('path').attr('class','state')
+        .attr('d', path).attr('fill', '#eee');
+
+      const refoPaths = gRefo.selectAll('.state')
+        .data(states).join('path').attr('class','state')
+        .attr('d', path).attr('fill', '#eee');
+
+      svgProt.append('path').attr('d', path(borders)).attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('pointer-events','none');
+      svgRefo.append('path').attr('d', path(borders)).attr('fill','none').attr('stroke','#fff').attr('stroke-width',0.6).attr('pointer-events','none');
+
+      function paint() {
+        const valsProt = states.map(s => s.data?.[METRIC_PROT]).filter(Number.isFinite);
+        const valsRefo = states.map(s => s.data?.[METRIC_REFO]).filter(Number.isFinite);
+        const all = sharedChk.checked ? valsProt.concat(valsRefo) : null;
+
+        const colorProt = d3.scaleQuantile().domain(sharedChk.checked ? all : valsProt).range(GREEN);
+        const colorRefo = d3.scaleQuantile().domain(sharedChk.checked ? all : valsRefo).range(GREEN);
+
+        protPaths.attr('fill', d => Number.isFinite(d.data?.[METRIC_PROT]) ? colorProt(d.data[METRIC_PROT]) : '#eee')
+                 .classed('selected', d => selected.has(stateKey(d)));
+
+        refoPaths.attr('fill', d => Number.isFinite(d.data?.[METRIC_REFO]) ? colorRefo(d.data[METRIC_REFO]) : '#eee')
+                 .classed('selected', d => selected.has(stateKey(d)));
+
+        drawLegend(legendProt, colorProt, 'Protected Area Trees (%)', sharedChk.checked ? all : valsProt);
+        drawLegend(legendRefo, colorRefo, 'Reforestation Rate (%)', sharedChk.checked ? all : valsRefo);
+
+        function handleMove(event, d) {
+          const name = stateKey(d);
+          const vP = d.data?.[METRIC_PROT];
+          const vR = d.data?.[METRIC_REFO];
+          highlight(name, true);
+          tooltip.style('opacity', 1)
+            .html(`<strong>${name}</strong><br>Protected: ${Number.isFinite(vP)? fmtPct(vP)+'%' : 'N/A'}<br>Reforestation: ${Number.isFinite(vR)? fmtPct(vR)+'%' : 'N/A'}`)
+            .style('left', (event.clientX + 14) + 'px')
+            .style('top', (event.clientY - 24) + 'px');
+        }
+        function handleLeave(){ highlight(null, false); tooltip.style('opacity', 0); }
+        function handleClick(e, d){
+          const name = stateKey(d);
+          if (selected.has(name)) selected.delete(name); else selected.add(name);
+          protPaths.classed('selected', s => selected.has(stateKey(s)));
+          refoPaths.classed('selected', s => selected.has(stateKey(s)));
+          renderShortlist();
+        }
+
+        protPaths.on('mousemove', handleMove).on('mouseleave', handleLeave).on('click', handleClick);
+        refoPaths.on('mousemove', handleMove).on('mouseleave', handleLeave).on('click', handleClick);
+      }
+
+      function highlight(name, on){
+        gProt.selectAll('.state').classed('hovered', d => on && stateKey(d) === name);
+        gRefo.selectAll('.state').classed('hovered', d => on && stateKey(d) === name);
+      }
+
+      function drawLegend(holder, color, title, values){
+        holder.selectAll('*').remove();
+        if (!values || !values.length) return;
+        const bins = [d3.min(values), ...color.quantiles(), d3.max(values)];
+        const wrap = holder.append('div').attr('class','legend');
+        wrap.append('div').attr('class','title').text(title);
+        const bar = wrap.append('div').attr('class','bar');
+        for (let i=0;i<bins.length-1;i++){
+          bar.append('span').attr('class','seg').style('background', color((bins[i]+bins[i+1])/2));
+        }
+        const ticks = wrap.append('div').attr('class','ticks');
+        bins.forEach(b => ticks.append('span').text(fmtPct(b)));
+      }
+
+      function renderShortlist(){
+        const list = d3.select('#list');
+        const empty = d3.select('#empty');
+        list.selectAll('*').remove();
+        if (!selected.size){ empty.style('display','block'); clearBtn.disabled=true; return; }
+        empty.style('display','none'); clearBtn.disabled=false;
+
+        const items = Array.from(selected).sort();
+        items.forEach(name => {
+          const s = states.find(f => f.properties.name === name);
+          const p = s?.data?.[METRIC_PROT];
+          const r = s?.data?.[METRIC_REFO];
+          const gap = (Number.isFinite(p) && Number.isFinite(r)) ? (p - r) : NaN;
+
+          const row = list.append('div').attr('class','row');
+          row.append('div').attr('class','name').text(name);
+          const vals = row.append('div').attr('class','vals');
+          vals.append('span').text(`Prot: ${Number.isFinite(p)? fmtPct(p)+'%' : 'N/A'}`);
+          vals.append('span').text(`Refo: ${Number.isFinite(r)? fmtPct(r)+'%' : 'N/A'}`);
+          vals.append('span')
+            .attr('class', Number.isFinite(gap) ? (gap>=0 ? 'gappos' : 'gapneg') : null)
+            .text(Number.isFinite(gap) ? `Gap: ${gap>=0?'+':''}${fmtPct(gap)}%` : '');
+          const btn = row.append('button').attr('class','btn').text('Remove');
+          btn.on('click', ()=>{ selected.delete(name); paint(); renderShortlist(); });
+        });
+      }
+
+      sharedChk.addEventListener('change', paint);
+      clearBtn.addEventListener('click', ()=>{ selected.clear(); paint(); renderShortlist(); });
+
+      paint();
+    }).catch(err => {
+      console.error(err);
+      alert('Failed to load map or CSV. Ensure data/trees.csv exists.');
+    });
+  })();
+  </script>
+</body>
+</html>
